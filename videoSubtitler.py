@@ -1,9 +1,11 @@
-import cv2
-import sys
+import os, cv2, sys, re
 from PyQt6 import QtWidgets, QtGui, QtCore
 from PyQt6.QtCore import pyqtSignal, QSize, Qt, QUrl, QLoggingCategory
 from PyQt6.QtWidgets import QHBoxLayout, QMessageBox, QSlider
 from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
+from moviepy import VideoFileClip
+
+##pip install moviepy TODO: OCUPAN ESTO
 
 QLoggingCategory.setFilterRules("qt.multimedia.*=false") #para que no salgan mensajes feos
 
@@ -31,13 +33,14 @@ class Window(QtWidgets.QWidget):
         self.OpenCV_image = None
         self.OpenCV_image2 = None
         self.center()
+        self.subtitles = []
 
         self._path = None
 
         self.viewer = MiEtiqueta()
         self.viewer2 = MiEtiqueta()
-        self.viewer.setFixedSize(840, 680)
-        self.viewer2.setFixedSize(840, 680)
+        self.viewer.setFixedSize(800, 680)
+        self.viewer2.setFixedSize(800, 680)
         self.viewer.setScaledContents(True)
         self.viewer2.setScaledContents(True)
 
@@ -63,7 +66,7 @@ class Window(QtWidgets.QWidget):
         # self.botonProcesaReservado.setText("Marker Ratio")
         # self.botonProcesaReservado.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
         self.botonProcesaReservado.setMinimumSize(BUTTON_SIZE)
-        self.botonProcesaReservado.clicked.connect(self.detectSigns)
+        self.botonProcesaReservado.clicked.connect(self.handleOpenSRT)
 
         button_layout = QHBoxLayout()
         button_layout.addWidget(self.buttonOpen)
@@ -71,9 +74,14 @@ class Window(QtWidgets.QWidget):
         button_layout.addWidget(self.botonProcesaReservado)
         button_layout.addWidget(self.guardarImagen)
 
+        self.srt_display = QtWidgets.QTextEdit()
+        self.srt_display.setReadOnly(True)
+        self.srt_display.setFixedSize(150,680)
+
         layout.addLayout(button_layout, 0, 0, 1, 4)
         layout.addWidget(self.viewer, 1, 0, 1, 2)
         layout.addWidget(self.viewer2, 1, 2, 1, 2)
+        layout.addWidget(self.srt_display, 1, 4, 2, 1)
 
         self.cap = None
         self.is_playing = False
@@ -81,7 +89,6 @@ class Window(QtWidgets.QWidget):
         self.total_frames = 0
         self.fps = 30
 
-        # Media player setup
         self.media_player = QMediaPlayer()
         self.audio_output = QAudioOutput()
         self.media_player.setAudioOutput(self.audio_output)
@@ -90,7 +97,7 @@ class Window(QtWidgets.QWidget):
 
         self.slider = QSlider(Qt.Orientation.Horizontal)
         self.slider.setTickPosition(QSlider.TickPosition.NoTicks)
-        layout.addWidget(self.slider, 2, 0, 1, 2)  # Add to layout
+        layout.addWidget(self.slider, 2, 0, 1, 2)
         self.slider.sliderMoved.connect(self.seek_frame)
 
         Tamano = (self.viewer.size().width(), self.viewer.size().height())
@@ -100,19 +107,81 @@ class Window(QtWidgets.QWidget):
     def ProcesarImage(self):
         pass
 
+    def handleOpenSRT(self):
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self, "Choose SRT File", ".", "Subtitles (*.srt)"
+        )
+        if path:
+            with open(path, "r", encoding="utf-8") as file:
+                srt_content = file.read()
+                self.parse_srt(path)
+                self.srt_display.setPlainText(srt_content)
+
+    def parse_srt(self, path):
+        with open(path, "r", encoding="utf-8") as file:
+            srt_content = file.read()
+
+        pattern = r"(\d+)\n(\d{2}:\d{2}:\d{2},\d{3}) --> (\d{2}:\d{2}:\d{2},\d{3})\n(.+?)(?=\n\n|\Z)"
+        matches = re.finditer(pattern, srt_content, re.DOTALL)
+
+        self.subtitles = []
+
+        for match in matches:
+            start_time = self.srt_time_to_ms(match.group(2))
+            end_time = self.srt_time_to_ms(match.group(3))
+            text = match.group(4).replace("\n", " ")
+            self.subtitles.append((start_time, end_time, text))
+
+    def srt_time_to_ms(self, time_str):
+        h, m, s_ms = time_str.split(":")
+        s, ms = s_ms.split(",")
+        return (int(h) * 3600 + int(m) * 60 + int(s)) * 1000 + int(ms)
+
+
     def handleSaveFile(self):
-        if self.OpenCV_image2 is not None:
-            defaultname = "example.png"
+        if self.cap is None or not self.cap.isOpened():
+            QMessageBox.warning(self, "Error", "No video loaded to save.")
+            return
 
-            fileName, _ = QtWidgets.QFileDialog.getSaveFileName(self, "Save File", defaultname,
-                                                                "Images(*.jpg *.png)")
+        fileName, _ = QtWidgets.QFileDialog.getSaveFileName(self, "Save Video", "output.mp4", "Videos (*.mp4 *.avi)")
 
-            if fileName:
-                if not fileName.endswith(('.png', '.jpg')):
-                    fileName += ".png"
-                cv2.imwrite(fileName, self.OpenCV_image2)
-        else:
-            QMessageBox.warning(self, "Error", "No hay nada que guardar aun")
+        if not fileName:
+            return
+
+        temp_video = "temp_video.mp4"
+
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')  # Codec MP4
+        frame_width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        frame_height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        fps = self.cap.get(cv2.CAP_PROP_FPS)
+
+        out = cv2.VideoWriter(temp_video, fourcc, fps, (frame_width, frame_height))
+
+        self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+
+        while True:
+            ret, frame = self.cap.read()
+            if not ret:
+                break
+
+            timestamp_ms = int(self.cap.get(cv2.CAP_PROP_POS_MSEC))
+            frame = self.add_subtitle_to_frame(frame, timestamp_ms)
+
+            out.write(frame)
+
+        out.release()
+
+        original_clip = VideoFileClip(self._path)
+        processed_clip = VideoFileClip(temp_video)
+
+        final_clip = processed_clip.with_audio(original_clip.audio)
+
+        #final_clip.write_videofile(fileName, codec="libx264", audio_codec="aac") #si quieren ver mugrero que imprime, ó si les falla
+        final_clip.write_videofile(fileName, codec="libx264", audio_codec="aac", verbose=False, logger=None)
+
+        os.remove(temp_video)
+
+        QMessageBox.information(self, "Success", "Video saved successfully with audio!")
 
     def handleOpen(self):
         start = "."
@@ -126,22 +195,19 @@ class Window(QtWidgets.QWidget):
                 QMessageBox.warning(self, "Error", "Could not open video file")
                 return
 
-            # Initialize video properties
             self.total_frames = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
             self.fps = self.cap.get(cv2.CAP_PROP_FPS)
             self.slider.setMaximum(self.total_frames - 1)
 
-            # Set up media player for audio
             self.media_player.setSource(QUrl.fromLocalFile(path))
 
-            # Show first frame
             ret, frame = self.cap.read()
             if ret:
                 self.current_frame = 0
                 self.update_viewers(frame)
 
     def toggle_playback(self):
-        if self.OpenCV_image2 is not None:
+        if self.cap is not None and self.cap.isOpened():
             if self.is_playing:
                 self.timer.stop()
                 self.media_player.pause()
@@ -169,11 +235,70 @@ class Window(QtWidgets.QWidget):
         if ret:
             self.current_frame += 1
             self.slider.setValue(self.current_frame)
+            timestamp = int(self.media_player.position())  # time in ms
+            frame = self.add_subtitle_to_frame(frame, timestamp)
             self.update_viewers(frame)
-        else:
+
+        if self.current_frame >= self.total_frames - 1:
             self.timer.stop()
             self.media_player.stop()
             self.is_playing = False
+
+    def add_subtitle_to_frame(self, frame, timestamp):
+        for start, end, text in self.subtitles:
+            if start <= timestamp <= end:
+                return self.draw_text_on_frame(frame, text) #si si tiene
+        return frame #si no tiene
+
+    def draw_text_on_frame(self, frame, text):
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        font_scale = 0.7
+        font_thickness = 1
+        text_color = (255, 255, 255)
+        outline_color = (0, 0, 0)
+        max_width = frame.shape[1] - 100
+
+        wrapped_text = self.wrap_text(text, font, font_scale, font_thickness, max_width)
+
+        text_height = cv2.getTextSize("A", font, font_scale, font_thickness)[0][1]
+        total_height = len(wrapped_text) * (text_height + 5)
+
+        text_x = frame.shape[1] // 2
+        text_y = frame.shape[0] - 60 - total_height
+
+        for i, line in enumerate(wrapped_text):
+            y_offset = text_y + i * (text_height + 5)
+
+            text_size = cv2.getTextSize(line, font, font_scale, font_thickness)[0]
+            x_offset = text_x - (text_size[0] // 2)
+
+            for dx, dy in [(-1, -1), (-1, 1), (1, -1), (1, 1)]:
+                cv2.putText(frame, line, (x_offset + dx, y_offset + dy), font, font_scale, outline_color,
+                            font_thickness + 1, cv2.LINE_AA)
+
+            cv2.putText(frame, line, (x_offset, y_offset), font, font_scale, text_color, font_thickness, cv2.LINE_AA)
+
+        return frame
+
+    def wrap_text(self, text, font, font_scale, font_thickness, max_width):
+        words = text.split()
+        lines = []
+        current_line = ""
+
+        for word in words:
+            test_line = current_line + " " + word if current_line else word
+            text_size = cv2.getTextSize(test_line, font, font_scale, font_thickness)[0]
+
+            if text_size[0] <= max_width:
+                current_line = test_line
+            else:
+                lines.append(current_line)
+                current_line = word
+
+        if current_line:
+            lines.append(current_line)
+
+        return lines
 
     def detectSigns(self):
         if self.OpenCV_image2 is not None:
@@ -184,7 +309,7 @@ class Window(QtWidgets.QWidget):
     def update_viewers(self, frame):
         self.ActualizarPixMap(frame)
         self.ActualizarPixMap2(frame)
-        # Store current frame for processing
+
         self.OpenCV_image2 = frame.copy()
 
     def ActualizarPixMap(self, image):
@@ -217,6 +342,6 @@ class Window(QtWidgets.QWidget):
 if __name__ == '__main__':
     app = QtWidgets.QApplication(sys.argv)
     window = Window()
-    window.setWindowTitle("Traffic Sign Detector")
+    window.setWindowTitle("Video Subtitler")
     window.show()
     sys.exit(app.exec())

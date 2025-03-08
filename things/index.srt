@@ -1,0 +1,32 @@
+1
+00:00:00,960 --> 00:00:05,440
+Great job. You're making your way through this course and the steps of a UX research study.
+
+2
+00:00:06,160 --> 00:00:11,280
+To begin, you learned about the four steps in a UX research study. Then you dove deep into
+
+3
+00:00:11,280 --> 00:00:16,560
+the first step, planning a study. There are seven elements of a UX research plan and we explored
+
+4
+00:00:16,560 --> 00:00:23,360
+each of them, the project background, research goals, research questions, key performance indicators,
+
+5
+00:00:23,360 --> 00:00:31,680
+KPIs, methodology, participants, and script. Lastly, you investigated why and how to include
+
+6
+00:00:31,680 --> 00:00:38,320
+data privacy in user research. Coming up, we'll move from the first step of planning a research study
+
+7
+00:00:38,320 --> 00:00:44,880
+to the second step, conducting the research. To conduct research, we'll dig into one popular method,
+
+8
+00:00:44,880 --> 00:00:47,840
+usability studies. See you there.
+
